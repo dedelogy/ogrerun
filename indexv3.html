@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ogre Runner - V3.3 Stable Bounce</title>
+    <style>
+        * { box-sizing: border-box; touch-action: none; }
+        body { margin: 0; padding: 0; background: #1a1a1a; display: flex; justify-content: center; align-items: center; height: 100vh; width: 100vw; overflow: hidden; }
+        #game-container { position: relative; width: 100%; height: 100%; max-width: 500px; aspect-ratio: 9 / 16; background: #1a1a1a; overflow: hidden; }
+        canvas { width: 100%; height: 100%; display: block; }
+        #ui { position: absolute; top: 40px; width: 100%; text-align: center; color: #fff; font-family: 'Arial Black', sans-serif; font-size: 28px; text-shadow: 2px 2px 4px #000; pointer-events: none; z-index: 10; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui">SCORE: <span id="score">0</span></div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 1080; canvas.height = 1920;
+
+    const assets = {
+        forest: { src: 'forestloop.jpg', img: new Image() },
+        path: { src: 'stonespath.jpg', img: new Image() },
+        stone: { src: 'stoneblock.png', img: new Image() },
+        ogre: []
+    };
+
+    let loadedCount = 0;
+    function init() {
+        [assets.forest, assets.path, assets.stone].forEach(a => {
+            a.img.src = a.src;
+            a.img.onload = () => loadedCount++;
+        });
+        for(let i=1; i<=10; i++) {
+            let img = new Image();
+            img.src = `0_Ogre_Running_${i.toString().padStart(3, '0')}.png`;
+            img.onload = () => loadedCount++;
+            assets.ogre.push(img);
+        }
+        requestAnimationFrame(gameLoop);
+    }
+
+    let player = {
+        x: 120, y: 1300, 
+        dw: 380, dh: 350, 
+        dy: 0, jumpForce: -62, gravity: 2.5,
+        groundY: 1650, 
+        ogreFootOffset: 25, 
+        jumpCount: 0, maxJumps: 2,
+        frame: 0, animTimer: 0, animSpeed: 4,
+        isStuck: false, onPlatform: false,
+        
+        // Mantul halus (Lerp based)
+        scaleX: 1, scaleY: 1,
+        targetScaleX: 1, targetScaleY: 1
+    };
+
+    let world = {
+        bgX: 0, bgSpeed: 3,
+        pathX: 0, pathSpeed: 20, 
+        score: 0
+    };
+
+    let obstacles = [];
+
+    function update() {
+        if(loadedCount < 13) return;
+
+        let onAnyStone = false;
+        let collisionDetected = false;
+
+        obstacles.forEach(obs => {
+            let playerFootY = player.y + player.dh - player.ogreFootOffset;
+            if (player.x + player.dw - 120 > obs.x && player.x + 120 < obs.x + obs.w &&
+                playerFootY <= obs.y + 60 && playerFootY >= obs.y - 20 && player.dy >= 0) {
+                
+                // Triger redaman saat mendarat di batu
+                if (player.dy > 5) { player.scaleX = 1.15; player.scaleY = 0.85; }
+                player.y = obs.y - player.dh + player.ogreFootOffset;
+                player.dy = 0; player.jumpCount = 0; onAnyStone = true;
+            } 
+            else if (player.x + player.dw - 100 > obs.x && player.x + 120 < obs.x + obs.w && playerFootY - 40 > obs.y) {
+                collisionDetected = true;
+            }
+        });
+
+        player.onPlatform = onAnyStone;
+        player.isStuck = collisionDetected && !onAnyStone;
+
+        if(!player.isStuck) {
+            world.score += 0.2;
+            document.getElementById('score').innerText = Math.floor(world.score);
+            world.bgX -= world.bgSpeed;
+            world.pathX -= world.pathSpeed;
+            if (Math.random() < 0.01) {
+                obstacles.push({ x: canvas.width, y: player.groundY - 420, w: 450, h: 450 });
+            }
+        }
+
+        if (world.bgX <= -canvas.width * 2) world.bgX = 0;
+        if (world.pathX <= -canvas.width) world.pathX = 0;
+
+        if (!player.onPlatform) {
+            player.dy += player.gravity;
+            player.y += player.dy;
+        }
+
+        // Mendarat di Tanah
+        let foot = player.y + player.dh - player.ogreFootOffset;
+        if (foot > player.groundY) {
+            // Triger redaman saat mendarat di tanah
+            if (player.dy > 5) { player.scaleX = 1.15; player.scaleY = 0.85; }
+            player.y = player.groundY - player.dh + player.ogreFootOffset;
+            player.dy = 0; player.jumpCount = 0;
+        }
+
+        // Kembalikan scale ke normal (Lerp pelan agar mantul dikit)
+        player.scaleX += (player.targetScaleX - player.scaleX) * 0.15;
+        player.scaleY += (player.targetScaleY - player.scaleY) * 0.15;
+
+        player.animTimer++;
+        if (player.animTimer >= player.animSpeed) {
+            player.frame = (player.frame + 1) % 10;
+            player.animTimer = 0;
+        }
+
+        obstacles.forEach((obs, i) => {
+            if(!player.isStuck) obs.x -= world.pathSpeed;
+            if (obs.x + obs.w < 0) obstacles.splice(i, 1);
+        });
+    }
+
+    function draw() {
+        ctx.fillStyle = "#1a1a1a";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Background & Path (Proporsional)
+        if (assets.forest.img.complete) {
+            let img = assets.forest.img;
+            let dW = canvas.height * (img.width/img.height);
+            ctx.drawImage(img, world.bgX, 0, dW, canvas.height);
+            ctx.drawImage(img, world.bgX + dW, 0, dW, canvas.height);
+        }
+        if (assets.path.img.complete) {
+            ctx.drawImage(assets.path.img, world.pathX, player.groundY, canvas.width, 350);
+            ctx.drawImage(assets.path.img, world.pathX + canvas.width, player.groundY, canvas.width, 350);
+        }
+
+        obstacles.forEach(obs => {
+            if (assets.stone.img.complete) ctx.drawImage(assets.stone.img, obs.x, obs.y, obs.w, obs.h);
+        });
+
+        // DRAW OGRE
+        ctx.save();
+        // Pivot KAKI
+        ctx.translate(player.x + player.dw/2, player.y + player.dh - player.ogreFootOffset);
+        // Kunci agar scaleX tidak minus (Anti-Mirror)
+        ctx.scale(Math.max(0.1, player.scaleX), player.scaleY);
+        const curFrame = assets.ogre[player.frame];
+        if (curFrame) {
+            ctx.drawImage(curFrame, 150, 150, 600, 700, -player.dw/2, -player.dh + player.ogreFootOffset, player.dw, player.dh);
+        }
+        ctx.restore();
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    const jump = (e) => {
+        if (e.cancelable) e.preventDefault();
+        if (player.jumpCount < player.maxJumps) {
+            player.dy = player.jumpForce;
+            player.jumpCount++;
+            player.onPlatform = false;
+            // Stretch sedikit pas lompat
+            player.scaleX = 0.9; player.scaleY = 1.15;
+        }
+    };
+    window.addEventListener('mousedown', jump);
+    window.addEventListener('touchstart', jump, { passive: false });
+
+    init();
+</script>
+</body>
+</html>

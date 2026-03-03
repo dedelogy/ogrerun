@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mega-Parkour Engine 9:16</title>
+    <style>
+        /* CSS UNTUK TAMPILAN MOBILE-CENTRIC */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a; /* Warna luar canvas */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background-color: #87CEEB; /* Langit Biru Default */
+            aspect-ratio: 9 / 16;
+            height: 95vh; /* Mengikuti tinggi layar */
+            max-width: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated; /* PENTING: Agar Pixel Art tidak blur */
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            text-shadow: 2px 2px 0 #000;
+            pointer-events: none; /* Klik tembus ke canvas */
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui-layer">
+        <div id="timer">TIME: 00:00</div>
+        <div id="status">STAGE 1: LOADING...</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // SETUP RESOLUSI INTERNAL (Low-res agar ringan & gaya retro)
+    canvas.width = 180;
+    canvas.height = 320;
+
+    // VARIABLE GAME
+    let isJumping = false;
+    let velocityY = 0;
+    let gravity = 0.5;
+    let jumpStrength = -7;
+    let playerY = 250; // Posisi awal Y
+    let groundY = 280; // Lantai dasar imajiner
+    let startTime = Date.now();
+
+    // 1. INTRIK: AUTO-RUN (Latar belakang bergerak)
+    let bgOffset = 0;
+
+    function update() {
+        // Logika Gravitasi & Lompat
+        if (isJumping) {
+            velocityY += gravity;
+            playerY += velocityY;
+
+            if (playerY >= groundY) {
+                playerY = groundY;
+                isJumping = false;
+                velocityY = 0;
+            }
+        }
+
+        // Latar belakang seolah bergerak (Looping)
+        bgOffset -= 2; 
+        if (bgOffset <= -canvas.width) bgOffset = 0;
+
+        // Update Timer
+        let elapsed = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('timer').innerText = `TIME: ${elapsed}s`;
+    }
+
+    function draw() {
+        // Bersihkan Layar
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 2. INTRIK: LAYER BACKGROUND (Placeholder)
+        ctx.fillStyle = "#5DADE2"; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Gambar Lantai Bergerak (Placeholder)
+        ctx.fillStyle = "#2E4053";
+        ctx.fillRect(bgOffset, groundY + 10, canvas.width, 40);
+        ctx.fillRect(bgOffset + canvas.width, groundY + 10, canvas.width, 40);
+
+        // 3. INTRIK: KARAKTER (Placeholder Kotak - Nantinya Pixel Art)
+        ctx.fillStyle = "#ECF0F1";
+        // Squash & Stretch Sederhana (Gepeng saat di bawah, tinggi saat lompat)
+        let playerHeight = isJumping ? 24 : 20;
+        let playerWidth = isJumping ? 16 : 20;
+        ctx.fillRect(30, playerY - playerHeight, playerWidth, playerHeight);
+
+        // Info Kontrol
+        ctx.fillStyle = "rgba(255,255,255,0.5)";
+        ctx.font = "10px Arial";
+        ctx.fillText("TAP UNTUK LOMPAT", 40, 310);
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // 4. INTRIK: ONE-TAP CONTROL
+    const handleAction = () => {
+        if (!isJumping) {
+            isJumping = true;
+            velocityY = jumpStrength;
+        }
+    };
+
+    // Support Klik Mouse & Layar Sentuh HP
+    window.addEventListener('mousedown', handleAction);
+    window.addEventListener('touchstart', (e) => {
+        e.preventDefault(); // Mencegah zoom saat tap cepat
+        handleAction();
+    });
+
+    // Mulai Game
+    gameLoop();
+    document.getElementById('status').innerText = "STAGE 1: READY!";
+</script>
+
+</body>
+</html>

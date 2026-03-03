@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ogre Runner - V3.3.2 Collision Fix</title>
+    <style>
+        * { box-sizing: border-box; touch-action: none; -webkit-user-select: none; user-select: none; }
+        body { margin: 0; padding: 0; background: #1a1a1a; display: flex; justify-content: center; align-items: center; height: 100vh; width: 100vw; overflow: hidden; }
+        #game-container { position: relative; width: 100%; height: 100%; max-width: 500px; aspect-ratio: 9 / 16; background: #1a1a1a; overflow: hidden; }
+        canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; background: #222; }
+        #ui { position: absolute; top: 40px; width: 100%; text-align: center; color: #fff; font-family: 'Arial Black', sans-serif; font-size: 28px; text-shadow: 2px 2px 4px #000; pointer-events: none; z-index: 10; }
+        #splash { position: absolute; inset: 0; background: #000; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; font-family: sans-serif; }
+        #start-btn { padding: 15px 30px; font-size: 18px; font-weight: bold; background: #ffcc00; border: none; border-radius: 8px; cursor: pointer; display: none; margin-top: 20px; color: #000; }
+    </style>
+</head>
+<body>
+
+<div id="splash">
+    <div id="loading-status">Memperbaiki Hitbox Ogre...</div>
+    <button id="start-btn">MULAI GAME</button>
+</div>
+
+<div id="game-container">
+    <div id="ui">SCORE: <span id="score">0</span></div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    // --- AUDIO ENGINE (Anti-IDM Buffer Strategy) ---
+    const AudioEngine = {
+        context: null,
+        buffers: {},
+        init() {
+            try { this.context = new (window.AudioContext || window.webkitAudioContext)(); } 
+            catch(e) { console.error("AudioContext fail"); }
+        },
+        async load(name, url) {
+            try {
+                const response = await fetch(url, { cache: 'no-cache' });
+                const data = await response.arrayBuffer();
+                this.buffers[name] = await this.context.decodeAudioData(data);
+            } catch (e) { console.warn(`Gagal muat audio: ${url}`); }
+        },
+        play(name, volume = 1, loop = false) {
+            if (!this.context || !this.buffers[name]) return;
+            if (this.context.state === 'suspended') this.context.resume();
+            const source = this.context.createBufferSource();
+            const gainNode = this.context.createGain();
+            source.buffer = this.buffers[name];
+            source.loop = loop;
+            gainNode.gain.value = volume;
+            source.connect(gainNode);
+            gainNode.connect(this.context.destination);
+            source.start(0);
+        }
+    };
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 1080; canvas.height = 1920;
+
+    const assets = {
+        forest: { src: 'forestloop.jpg', img: new Image() },
+        path: { src: 'stonespath.jpg', img: new Image() },
+        stone: { src: 'stoneblock.png', img: new Image() },
+        ogre: []
+    };
+
+    let loadedCount = 0;
+    const totalAssets = 18; 
+
+    function checkLoad() {
+        loadedCount++;
+        const progress = Math.min(100, Math.floor((loadedCount/totalAssets)*100));
+        document.getElementById('loading-status').innerText = `Memuat Aset (${progress}%)`;
+        if (loadedCount >= totalAssets) {
+            document.getElementById('loading-status').innerText = "Ogre Siap Berlari!";
+            document.getElementById('start-btn').style.display = "block";
+        }
+    }
+
+    async function init() {
+        AudioEngine.init();
+        await AudioEngine.load('jump1', 'ogre_jump1.ogg'); checkLoad();
+        await AudioEngine.load('jump2', 'ogre_jump2.ogg'); checkLoad();
+        await AudioEngine.load('landing', 'ogre_landing.ogg'); checkLoad();
+        await AudioEngine.load('step', 'ogre_step.ogg'); checkLoad();
+        await AudioEngine.load('bgm', 'ogre_bgm.ogg'); checkLoad();
+
+        [assets.forest, assets.path, assets.stone].forEach(a => {
+            a.img.onload = checkLoad; a.img.onerror = checkLoad; a.img.src = a.src;
+        });
+
+        for(let i=1; i<=10; i++) {
+            let img = new Image();
+            img.onload = checkLoad; img.onerror = checkLoad;
+            img.src = `0_Ogre_Running_${i.toString().padStart(3, '0')}.png`;
+            assets.ogre.push(img);
+        }
+    }
+
+    // --- GAME LOGIC ---
+    let player = {
+        x: 120, y: 1300, dw: 380, dh: 350, dy: 0,
+        jumpForce: -62, gravity: 2.5, groundY: 1650, 
+        ogreFootOffset: 25, jumpCount: 0, maxJumps: 2,
+        frame: 0, animTimer: 0, animSpeed: 4,
+        onPlatform: false, wasInAir: false, isStuck: false,
+        scaleX: 1, scaleY: 1
+    };
+
+    let world = { bgX: 0, bgSpeed: 3, pathX: 0, pathSpeed: 20, score: 0 };
+    let obstacles = [];
+
+    function update() {
+        // --- FOOTSTEP LOGIC ---
+        if ((player.onPlatform || player.dy === 0) && !player.isStuck) {
+            if (player.frame === 2 || player.frame === 7) {
+                if (player.animTimer === 0) AudioEngine.play('step', 0.25);
+            }
+        }
+
+        if (!player.onPlatform) {
+            player.dy += player.gravity;
+            player.y += player.dy;
+            player.wasInAir = true;
+        }
+
+        // --- LANDING LOGIC (GROUND) ---
+        let pFootY = player.y + player.dh - player.ogreFootOffset;
+        if (pFootY > player.groundY) {
+            if (player.wasInAir) {
+                AudioEngine.play('landing', 0.8);
+                player.wasInAir = false;
+                if (player.dy > 5) { player.scaleX = 1.2; player.scaleY = 0.8; }
+            }
+            player.y = player.groundY - player.dh + player.ogreFootOffset;
+            player.dy = 0; player.jumpCount = 0;
+        }
+
+        player.scaleX += (1 - player.scaleX) * 0.15;
+        player.scaleY += (1 - player.scaleY) * 0.15;
+
+        // --- COLLISION LOGIC FIXED ---
+        let onAnyStone = false;
+        let collisionFound = false;
+
+        obstacles.forEach(obs => {
+            let pFoot = player.y + player.dh - player.ogreFootOffset;
+            
+            // 1. Logika Berdiri di Atas (Top Collision)
+            if (player.x + player.dw - 120 > obs.x && player.x + 120 < obs.x + obs.w &&
+                pFoot <= obs.y + 60 && pFoot >= obs.y - 20 && player.dy >= 0) {
+                
+                if (player.wasInAir) {
+                    AudioEngine.play('landing', 0.8);
+                    player.wasInAir = false;
+                }
+                player.y = obs.y - player.dh + player.ogreFootOffset;
+                player.dy = 0; player.jumpCount = 0; onAnyStone = true;
+            } 
+            
+            // 2. Logika Tabrakan Samping (Side Collision)
+            // Mengecek jika hitbox depan Ogre menyentuh sisi kiri stoneblock
+            if (!onAnyStone) {
+                if (player.x + player.dw - 100 > obs.x && player.x + 120 < obs.x + obs.w && pFoot - 40 > obs.y) {
+                    collisionFound = true;
+                }
+            }
+        });
+
+        player.onPlatform = onAnyStone;
+        player.isStuck = collisionFound;
+
+        if (!player.isStuck) {
+            world.score += 0.2;
+            document.getElementById('score').innerText = Math.floor(world.score);
+            world.bgX -= world.bgSpeed; world.pathX -= world.pathSpeed;
+            if (Math.random() < 0.01) obstacles.push({ x: canvas.width, y: player.groundY - 420, w: 450, h: 450 });
+        }
+
+        if (world.bgX <= -2160) world.bgX = 0;
+        if (world.pathX <= -canvas.width) world.pathX = 0;
+
+        obstacles.forEach((obs, i) => {
+            if(!player.isStuck) obs.x -= world.pathSpeed;
+            if (obs.x + obs.w < 0) obstacles.splice(i, 1);
+        });
+
+        player.animTimer++;
+        if (player.animTimer >= player.animSpeed) {
+            player.frame = (player.frame + 1) % 10;
+            player.animTimer = 0;
+        }
+    }
+
+    function draw() {
+        ctx.fillStyle = "#1a1a1a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (assets.forest.img.complete) {
+            ctx.drawImage(assets.forest.img, world.bgX, 0, 2160, 1920);
+            ctx.drawImage(assets.forest.img, world.bgX + 2160, 0, 2160, 1920);
+        }
+        if (assets.path.img.complete) {
+            ctx.drawImage(assets.path.img, world.pathX, player.groundY, canvas.width, 350);
+            ctx.drawImage(assets.path.img, world.pathX + canvas.width, player.groundY, canvas.width, 350);
+        }
+        obstacles.forEach(obs => {
+            if (assets.stone.img.complete) ctx.drawImage(assets.stone.img, obs.x, obs.y, obs.w, obs.h);
+        });
+        ctx.save();
+        ctx.translate(player.x + player.dw/2, player.y + player.dh - player.ogreFootOffset);
+        ctx.scale(Math.max(0.1, player.scaleX), player.scaleY);
+        const curFrame = assets.ogre[player.frame];
+        if (curFrame) ctx.drawImage(curFrame, 150, 150, 600, 700, -player.dw/2, -player.dh + player.ogreFootOffset, player.dw, player.dh);
+        ctx.restore();
+    }
+
+    function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+
+    const jumpAction = (e) => {
+        if (e.cancelable) e.preventDefault();
+        if (player.jumpCount < player.maxJumps) {
+            AudioEngine.play(player.jumpCount === 0 ? 'jump1' : 'jump2', 1);
+            player.dy = player.jumpForce;
+            player.jumpCount++;
+            player.onPlatform = false;
+            player.wasInAir = true;
+            player.scaleX = 0.85; player.scaleY = 1.15;
+        }
+    };
+
+    document.getElementById('start-btn').addEventListener('click', () => {
+        AudioEngine.context.resume().then(() => {
+            document.getElementById('splash').style.display = "none";
+            AudioEngine.play('bgm', 0.3, true);
+            requestAnimationFrame(gameLoop);
+            window.addEventListener('mousedown', jumpAction);
+            window.addEventListener('touchstart', jumpAction, { passive: false });
+        });
+    });
+
+    init();
+</script>
+</body>
+</html>
